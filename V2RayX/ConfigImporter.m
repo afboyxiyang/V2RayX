@@ -72,32 +72,37 @@
         return nil;
     }
     @try {
-        NSArray* parts = [[[link stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]] substringFromIndex:5] componentsSeparatedByString:@"#"];
-        NSString* tag = parts.count > 1 ?  [parts[1] stringByRemovingPercentEncoding]  : @"";
-        NSArray* mainParts = [parts[0] componentsSeparatedByString:@"/"];
-        if (mainParts.count > 1 && [mainParts[1] length] > 1) { // /?
-            return nil; // do not support plugin
+        NSURL* ssurl = [[NSURL alloc] initWithString:link];
+        NSNumber* enableOTA;
+        if ([@"ota=false" isEqualToString:[ssurl.query lowercaseString]]) {
+            enableOTA = @(NO);
+        } else if ([@"ota=true" isEqualToString:[ssurl.query lowercaseString]]) {
+            enableOTA = @(YES);
+        } else if (ssurl.query.length > 0) {
+            return nil; // only support ota
         }
-        NSArray* userinfoAndHost = [mainParts[0] componentsSeparatedByString:@"@"];
-        NSString* userinfoEncoded = userinfoAndHost[0];
-        NSString* userinfoDecoded = [ConfigImporter decodeBase64String:userinfoEncoded];
+        NSString* userinfoDecoded = [ConfigImporter decodeBase64String:ssurl.user];
         NSArray* userinfo = [userinfoDecoded componentsSeparatedByString:@":"];
-        NSArray* hostInfo = [userinfoAndHost[1] componentsSeparatedByString:@":"];
-        
-        NSNumberFormatter* f = [[NSNumberFormatter alloc] init];
-        f.numberStyle = NSNumberFormatterDecimalStyle;
-        NSNumber *port = [f numberFromString:hostInfo[1]];
-        if (!port) {
-            return nil;
+        if(enableOTA == nil) {
+            return @{
+                     @"server":ssurl.host,
+                     @"server_port":ssurl.port,
+                     @"password": userinfo[1],
+                     @"method":userinfo[0],
+                     @"tag":ssurl.fragment
+                     };
+        } else {
+            return @{
+                     @"server":ssurl.host,
+                     @"server_port":ssurl.port,
+                     @"password": userinfo[1],
+                     @"method":userinfo[0],
+                     @"tag":ssurl.fragment,
+                     @"ota":enableOTA
+                     };
         }
-        return @{
-                 @"server":hostInfo[0],
-                 @"server_port":port,
-                 @"password": userinfo[1],
-                 @"method":userinfo[0],
-                 @"tag":tag
-                 };
     } @catch (NSException *exception) {
+        NSLog(@"%@", exception);
         return nil;
     }
 }
@@ -135,6 +140,9 @@
              @"streamSettings": @{},
              @"mux": @{}
          } mutableDeepCopy];
+        if (jsonObject[@"ota"]) {
+            ssOutbound[@"settings"][@"servers"][0][@"ota"] = jsonObject[@"ota"];
+        }
         if (jsonObject[@"tag"] && [jsonObject[@"tag"] isKindOfClass:[NSString class]] && [jsonObject[@"tag"] length] ) {
             ssOutbound[@"tag"] = jsonObject[@"tag"];
         }
@@ -166,8 +174,8 @@
         [set[@"rules"] addObject:lastRule];
     }
     NSMutableArray* ruleToRemove = [[NSMutableArray alloc] init];
-    NSArray* notSupported = @[@"source", @"user", @"inboundTag", @"protocol"];
-    NSArray* supported = @[@"domain", @"ip", @"network", @"port"];
+    NSArray* notSupported = NOT_SUPPORTED_ROUTING;
+    NSArray* supported = SUPPORTED_ROUTING;
     // currently, source/user/inboundTag/protocol are not supported
     for (NSMutableDictionary* aRule in set[@"rules"]) {
         [aRule removeObjectsForKeys:notSupported];
@@ -277,6 +285,9 @@
 + (NSMutableDictionary*)importFromHTTPSubscription: (NSString*)httpLink {
     // https://blog.csdn.net/yi_zz32/article/details/48769487
     NSMutableDictionary* result = [@{@"vmess": @[], @"other": @[]} mutableDeepCopy];
+    if ([httpLink length] < 4) {
+        return nil;
+    }
     if (![@"http" isEqualToString:[httpLink substringToIndex:4]]) {
         return nil;
     }
